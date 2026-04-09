@@ -1,20 +1,19 @@
 # import flask
 from flask import *
-
 # importing pymysql
 import pymysql
 import pymysql.cursors
+from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import datetime, timedelta
+import secrets
 
 # initializing the flask app
 app = Flask(__name__)
 
-# importing os
 import os
-
-# creating a folder to save the images
 app.config["UPLOAD_FOLDER"] = 'static/images'
 
-# signup API
+# Sign up api
 # creating the route that corresponds to the web application function
 @app.route("/api/signup", methods =["POST"])
 # corresponding web application function
@@ -25,8 +24,11 @@ def signup():
     email = request.form["email"]
     phone = request.form['phone']
 
+    # Hash the password
+    hashed_password = generate_password_hash(password)
+
     # creating a connection to the database
-    connection = pymysql.connect(host= 'localhost', user = 'root', password = '', database = 'chatusokogarden')
+    connection = pymysql.connect(host= 'localhost', user = 'root', password = '', database = 'ecoshop')
     # defining the cursor
     cursor = connection.cursor()
     # defining the sql to insert data
@@ -40,7 +42,6 @@ def signup():
     # return a message to the user to show signup was successful
     return jsonify ({"Success" : "Thank you for signing up"})
 
-# signin API
 # creating the route
 @app.route("/api/signin", methods = ['POST'])
 # Defining the corresponding function
@@ -49,8 +50,9 @@ def signin():
     email = request.form["email"]
     password = request.form["password"]
     # creating a connection to the database
-    connection = pymysql.connect(host='localhost', user='root', password='', database='chatusokogarden')
+    connection = pymysql.connect(host='localhost', user='root', password='', database='ecoshop')
     # defining our cursor
+    
     cursor=connection.cursor(pymysql.cursors.DictCursor)
     # defining our sql query to select
     sql = "select * from users where email = %s and password = %s"
@@ -68,6 +70,112 @@ def signin():
         return jsonify ({"message": "Login successful", "user":user})
 
 
+# Forgot password part
+@app.route("/api/forgot-password", methods=["POST"])
+def forgot_password():
+    email = request.form["email"]
+
+    connection = pymysql.connect(host='localhost', user='root', password='', database='ecoshop')
+    cursor = connection.cursor()
+
+    sql = "SELECT * FROM users WHERE email = %s"
+    cursor.execute(sql, (email,))
+    user = cursor.fetchone()
+
+    if user:
+        return jsonify({"message": "Email found. You can reset your password."})
+    else:
+        return jsonify({"error": "Email not found"})
+     #  generate secure token
+    token = secrets.token_hex(16)
+
+    #  expiry time (30 minutes)
+    expiry = datetime.now() + timedelta(minutes=30)
+
+    # save token in database
+    cursor.execute(
+        "UPDATE users SET reset_token=%s, token_expiry=%s WHERE email=%s",
+        (token, expiry, email)
+    )
+    connection.commit()
+
+    #  reset link (frontend URL)
+    reset_link = f"http://localhost:3000/reset-password/{token}"
+    return jsonify({
+        "message": "Password reset link generated",
+        "reset_link": reset_link   # (for now we return it instead of email)
+    })
+    
+
+    
+# Reset password part
+@app.route("/api/reset-password/<token>", methods=["POST"])
+def reset_password(token):
+    new_password = request.form["new_password"]
+
+    connection = pymysql.connect(host='localhost', user='root', password='', database='ecoshop')
+    cursor = connection.cursor()
+
+    # find user with token
+    cursor.execute(
+        "SELECT * FROM users WHERE reset_token=%s",
+        (token,)
+    )
+    user = cursor.fetchone()
+
+    if not user:
+        return jsonify({"error": "Invalid token"})
+
+    expiry = user[5]  # adjust index based on your table
+
+    # check if token expired
+    if datetime.now() > expiry:
+        return jsonify({"error": "Token expired"})
+
+    # hash new password
+    hashed_password = generate_password_hash(new_password)
+
+    # update password + clear token
+    cursor.execute(
+        "UPDATE users SET password=%s, reset_token=NULL, token_expiry=NULL WHERE reset_token=%s",
+        (hashed_password, token)
+    )
+    connection.commit()
+
+    return jsonify({"message": "Password reset successful"})
+# Social logins part
+@app.route("/api/social-login", methods=["POST"])
+def social_login():
+    username = request.form["username"]
+    email = request.form["email"]
+
+    # connect to database
+    connection = pymysql.connect(
+        host='localhost',
+        user='root',
+        password='',
+        database='ecoshop'
+    )
+    cursor = connection.cursor()
+
+    # check if user already exists
+    sql = "SELECT * FROM users WHERE email = %s"
+    cursor.execute(sql, (email,))
+    user = cursor.fetchone()
+
+    if user:
+        return jsonify({"message": "Login successful"})
+    else:
+        # create new user (no password for social login)
+        sql = "INSERT INTO users (username, email) VALUES (%s, %s)"
+        cursor.execute(sql, (username, email))
+        connection.commit()
+
+        return jsonify({"message": "User created via social login"})    
+
+
+
+
 
 # add_product API
 # creating the route
@@ -75,10 +183,10 @@ def signin():
 # defining the corresponding web application function
 def add_product ():
     # getting the user input
-    product_name = request.form ['product_name']
-    product_description = request.form['product_description']
-    product_cost = request.form['product_cost']
-    photo = request.files['product_photo']
+    item_name = request.form ['item_name']
+    item_description = request.form['item_description']
+    item_cost = request.form['item_cost']
+    photo = request.files['item_photo']
     
     # get the image file name
     filename = photo.filename
@@ -89,13 +197,13 @@ def add_product ():
 
 
     # connecting to the database
-    connection = pymysql.connect(host = 'localhost', user = 'root', password='', database='chatusokogarden')
+    connection = pymysql.connect(host = 'localhost', user = 'root', password='', database='ecoshop')
     # defining the cursor
     cursor = connection.cursor()
     # crete the sql query
     sql = "insert into product_details (product_name, product_description, product_cost, product_photo) values(%s,%s,%s,%s)"
     # preaparing/defining the data for the sql query
-    data = (product_name, product_description, product_cost,filename)
+    data = (item_name, item_description, item_cost,filename)
     # execute the query
     cursor.execute(sql, data)
     # commit/save the changes to the database
@@ -103,86 +211,25 @@ def add_product ():
     # returning a response to the user
     return jsonify({"message" : "Product details added successfully"})
 
-
-# get_product_details API
+# get products API
 # creating the route
-@app.route("/api/get_product_details")
-# define the corresponding web application function
-def get_product_details():
-    # establish a connection to the database
-    connection = pymysql.connect(host= "localhost", user= "root", password= "", database= "chatusokogarden")
-    # define the cursor
-    cursor=connection.cursor(pymysql.cursors.DictCursor)
-    # defining the sql query
-    sql = "select * from product_details"
-    # executing the sql query
+@app.route("/api/get_items_details", methods = ['GET'])
+# defining the corresponding web application function
+def get_items_details():
+    # connecting to the database
+    connection = pymysql.connect(host = 'localhost', user = 'root', password='', database='ecoshop')
+    # defining the cursor
+    cursor = connection.cursor()
+    # creating the SQL query
+    sql = "SELECT * FROM product_details"
+    # executing the query
     cursor.execute(sql)
-    # fetching all the rows returned after sql execution
-    product_details = cursor.fetchall()
+    # fetching all the data from the database 
+    items_details = cursor.fetchall()
     # closing the database connection
     connection.close()
-    # returning a response to the user
-    return jsonify (product_details)
-
-
-
-# Mpesa Payment Route/Endpoint 
-import requests
-import datetime
-import base64
-from requests.auth import HTTPBasicAuth
-
-@app.route('/api/mpesa_payment', methods=['POST'])
-def mpesa_payment():
-    if request.method == 'POST':
-        amount = request.form['amount']
-        phone = request.form['phone']
-        # GENERATING THE ACCESS TOKEN
-        # create an account on safaricom daraja
-        consumer_key = "GTWADFxIpUfDoNikNGqq1C3023evM6UH"
-        consumer_secret = "amFbAoUByPV2rM5A"
-
-        api_URL = "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials"  # AUTH URL
-        r = requests.get(api_URL, auth=HTTPBasicAuth(consumer_key, consumer_secret))
-
-        data = r.json()
-        access_token = "Bearer" + ' ' + data['access_token']
-
-        #  GETTING THE PASSWORD
-        timestamp = datetime.datetime.today().strftime('%Y%m%d%H%M%S')
-        passkey = 'bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919'
-        business_short_code = "174379"
-        data = business_short_code + passkey + timestamp
-        encoded = base64.b64encode(data.encode())
-        password = encoded.decode('utf-8')
-
-        # BODY OR PAYLOAD
-        payload = {
-            "BusinessShortCode": "174379",
-            "Password": "{}".format(password),
-            "Timestamp": "{}".format(timestamp),
-            "TransactionType": "CustomerPayBillOnline",
-            "Amount": "1",  # use 1 when testing
-            "PartyA": phone,  # change to your number
-            "PartyB": "174379",
-            "PhoneNumber": phone,
-            "CallBackURL": "https://modcom.co.ke/api/confirmation.php",
-            "AccountReference": "account",
-            "TransactionDesc": "account"
-        }
-
-        # POPULAING THE HTTP HEADER
-        headers = {
-            "Authorization": access_token,
-            "Content-Type": "application/json"
-        }
-
-        url = "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest"  # C2B URL
-
-        response = requests.post(url, json=payload, headers=headers)
-        print(response.text)
-        return jsonify({"message": "Please Complete Payment in Your Phone and we will deliver in minutes"})
-    
+    # returning the data to the user
+    return jsonify( items_details)
 
 
 
