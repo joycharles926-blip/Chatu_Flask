@@ -4,8 +4,6 @@ from flask import *
 import pymysql
 import pymysql.cursors
 from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime, timedelta
-import secrets
 
 # initializing the flask app
 app = Flask(__name__)
@@ -19,7 +17,7 @@ app.config["UPLOAD_FOLDER"] = 'static/images'
 # corresponding web application function
 def signup():
     # get user input from user request
-    username = request.form["username"]
+    username = request.form["user_name"]
     password = request.form["password"]
     email = request.form["email"]
     phone = request.form['phone']
@@ -32,7 +30,7 @@ def signup():
     # defining the cursor
     cursor = connection.cursor()
     # defining the sql to insert data
-    sql = "insert into users (username, password, email, phone) values (%s, %s, %s, %s)"
+    sql = "insert into users (user_name, password, email, phone) values (%s, %s, %s, %s)"
     # defining our data that will replace the placeholders in sql
     data = (username, password, email, phone)
     # execute the query
@@ -86,27 +84,6 @@ def forgot_password():
         return jsonify({"message": "Email found. You can reset your password."})
     else:
         return jsonify({"error": "Email not found"})
-     #  generate secure token
-    token = secrets.token_hex(16)
-
-    #  expiry time (30 minutes)
-    expiry = datetime.now() + timedelta(minutes=30)
-
-    # save token in database
-    cursor.execute(
-        "UPDATE users SET reset_token=%s, token_expiry=%s WHERE email=%s",
-        (token, expiry, email)
-    )
-    connection.commit()
-
-    #  reset link (frontend URL)
-    reset_link = f"http://localhost:3000/reset-password/{token}"
-    return jsonify({
-        "message": "Password reset link generated",
-        "reset_link": reset_link   # (for now we return it instead of email)
-    })
-    
-
     
 # Reset password part
 @app.route("/api/reset-password/<token>", methods=["POST"])
@@ -167,7 +144,7 @@ def social_login():
         return jsonify({"message": "Login successful"})
     else:
         # create new user (no password for social login)
-        sql = "INSERT INTO users (username, email) VALUES (%s, %s)"
+        sql = "INSERT INTO users (user_name, email) VALUES (%s, %s)"
         cursor.execute(sql, (username, email))
         connection.commit()
 
@@ -201,7 +178,7 @@ def add_product ():
     # defining the cursor
     cursor = connection.cursor()
     # crete the sql query
-    sql = "insert into product_details (product_name, product_description, product_cost, product_photo) values(%s,%s,%s,%s)"
+    sql = "insert into items_details (item_name, item_description, item_cost, item_photo) values(%s,%s,%s,%s)"
     # preaparing/defining the data for the sql query
     data = (item_name, item_description, item_cost,filename)
     # execute the query
@@ -209,9 +186,9 @@ def add_product ():
     # commit/save the changes to the database
     connection.commit()
     # returning a response to the user
-    return jsonify({"message" : "Product details added successfully"})
+    return jsonify({"message" : "Item details added successfully"})
 
-# get products API
+# get items API
 # creating the route
 @app.route("/api/get_items_details", methods = ['GET'])
 # defining the corresponding web application function
