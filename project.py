@@ -4,6 +4,8 @@ from flask import *
 import pymysql
 import pymysql.cursors
 from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import datetime, timedelta
+import secrets
 
 # initializing the flask app
 app = Flask(__name__)
@@ -17,7 +19,7 @@ app.config["UPLOAD_FOLDER"] = 'static/images'
 # corresponding web application function
 def signup():
     # get user input from user request
-    username = request.form["user_name"]
+    username = request.form["username"]
     password = request.form["password"]
     email = request.form["email"]
     phone = request.form['phone']
@@ -30,9 +32,9 @@ def signup():
     # defining the cursor
     cursor = connection.cursor()
     # defining the sql to insert data
-    sql = "insert into users (user_name, password, email, phone) values (%s, %s, %s, %s)"
+    sql = "insert into users (username, password, email, phone) values (%s, %s, %s, %s)"
     # defining our data that will replace the placeholders in sql
-    data = (username, password, email, phone)
+    data = (username, hashed_password, email, phone)
     # execute the query
     cursor.execute(sql, data)
     # we need to commit to save the changes in the database
@@ -41,85 +43,42 @@ def signup():
     return jsonify ({"Success" : "Thank you for signing up"})
 
 # creating the route
-@app.route("/api/signin", methods = ['POST'])
-# Defining the corresponding function
+@app.route("/api/signin", methods=['POST'])
 def signin():
-    # getting user input
+    # get user input
     email = request.form["email"]
     password = request.form["password"]
-    # creating a connection to the database
-    connection = pymysql.connect(host='localhost', user='root', password='', database='ecoshop')
-    # defining our cursor
-    
-    cursor=connection.cursor(pymysql.cursors.DictCursor)
-    # defining our sql query to select
-    sql = "select * from users where email = %s and password = %s"
-    # defining our data to replace the placeholders
-    data = (email, password)
-    # executing the query
-    cursor.execute(sql,data)
-    # creating conditions for when the rows are zero or more
-    count = cursor.rowcount
-    # condition for when the rows are zero
-    if count ==0:
-        return jsonify({"message" : "Login failed"})
-    else:
-        user=cursor.fetchone()
-        return jsonify ({"message": "Login successful", "user":user})
 
-
-# Forgot password part
-@app.route("/api/forgot-password", methods=["POST"])
-def forgot_password():
-    email = request.form["email"]
-
-    connection = pymysql.connect(host='localhost', user='root', password='', database='ecoshop')
+    # connect to database
+    connection = pymysql.connect(
+        host='localhost',
+        user='root',
+        password='',
+        database='ecoshop',
+        cursorclass=pymysql.cursors.DictCursor
+    )
     cursor = connection.cursor()
 
+    # get user by email ONLY
     sql = "SELECT * FROM users WHERE email = %s"
     cursor.execute(sql, (email,))
     user = cursor.fetchone()
 
-    if user:
-        return jsonify({"message": "Email found. You can reset your password."})
+    # check if user exists AND password matches
+    if user and check_password_hash(user["password"], password):
+        return jsonify({
+            "message": "Login successful",
+            "user": {
+                "id": user["id"],
+                "username": user["username"],
+                "email": user["email"],
+                "phone": user["phone"]
+            }
+        })
     else:
-        return jsonify({"error": "Email not found"})
-    
-# Reset password part
-@app.route("/api/reset-password/<token>", methods=["POST"])
-def reset_password(token):
-    new_password = request.form["new_password"]
+        return jsonify({"message": "Login failed"})
 
-    connection = pymysql.connect(host='localhost', user='root', password='', database='ecoshop')
-    cursor = connection.cursor()
 
-    # find user with token
-    cursor.execute(
-        "SELECT * FROM users WHERE reset_token=%s",
-        (token,)
-    )
-    user = cursor.fetchone()
-
-    if not user:
-        return jsonify({"error": "Invalid token"})
-
-    expiry = user[5]  # adjust index based on your table
-
-    # check if token expired
-    if datetime.now() > expiry:
-        return jsonify({"error": "Token expired"})
-
-    # hash new password
-    hashed_password = generate_password_hash(new_password)
-
-    # update password + clear token
-    cursor.execute(
-        "UPDATE users SET password=%s, reset_token=NULL, token_expiry=NULL WHERE reset_token=%s",
-        (hashed_password, token)
-    )
-    connection.commit()
-
-    return jsonify({"message": "Password reset successful"})
 # Social logins part
 @app.route("/api/social-login", methods=["POST"])
 def social_login():
@@ -144,7 +103,7 @@ def social_login():
         return jsonify({"message": "Login successful"})
     else:
         # create new user (no password for social login)
-        sql = "INSERT INTO users (user_name, email) VALUES (%s, %s)"
+        sql = "INSERT INTO users (username, email) VALUES (%s, %s)"
         cursor.execute(sql, (username, email))
         connection.commit()
 
@@ -178,7 +137,7 @@ def add_product ():
     # defining the cursor
     cursor = connection.cursor()
     # crete the sql query
-    sql = "insert into items_details (item_name, item_description, item_cost, item_photo) values(%s,%s,%s,%s)"
+    sql = "insert into product_details (product_name, product_description, product_cost, product_photo) values(%s,%s,%s,%s)"
     # preaparing/defining the data for the sql query
     data = (item_name, item_description, item_cost,filename)
     # execute the query
@@ -186,9 +145,9 @@ def add_product ():
     # commit/save the changes to the database
     connection.commit()
     # returning a response to the user
-    return jsonify({"message" : "Item details added successfully"})
+    return jsonify({"message" : "Product details added successfully"})
 
-# get items API
+# get products API
 # creating the route
 @app.route("/api/get_items_details", methods = ['GET'])
 # defining the corresponding web application function
@@ -207,6 +166,48 @@ def get_items_details():
     connection.close()
     # returning the data to the user
     return jsonify( items_details)
+# Social logins part
+@app.route("/api/social-login", methods=["POST"])
+def social_login():
+    data = request.get_json()
+
+    username = data.get("username")
+    email = data.get("email")
+    provider = data.get("provider")       # e.g. "google"
+    provider_id = data.get("provider_id") # unique ID from provider
+
+    connection = pymysql.connect(
+        host='localhost',
+        user='root',
+        password='',
+        database='ecoshop'
+    )
+    cursor = connection.cursor()
+
+    # Check if user exists
+    cursor.execute("SELECT * FROM users WHERE email=%s", (email,))
+    user = cursor.fetchone()
+
+    if user:
+        # Optional: link provider if not already linked
+        cursor.execute("""
+            UPDATE users 
+            SET provider=%s, provider_id=%s 
+            WHERE email=%s
+        """, (provider, provider_id, email))
+        connection.commit()
+
+        return jsonify({"message": "Login successful"})
+    else:
+        # Create new user
+        cursor.execute("""
+            INSERT INTO users (username, email, provider, provider_id)
+            VALUES (%s, %s, %s, %s)
+        """, (username, email, provider, provider_id))
+
+        connection.commit()
+
+        return jsonify({"message": "User created via social login"})
 
 
 
